@@ -120,7 +120,7 @@ Respond with ONLY valid JSON and nothing else â€” no markdown, no code fences â€
         'X-Title': 'Pulse - AI Status & Risk Assistant',
       },
       body: JSON.stringify({
-      model: 'openrouter/free',
+      model: 'nvidia/nemotron-3-super-120b-a12b:free',
       max_tokens: 1000,
       messages: [{ role: 'user', content: prompt }],
 }),
