@@ -120,11 +120,10 @@ Respond with ONLY valid JSON and nothing else â€” no markdown, no code fences â€
         'X-Title': 'Pulse - AI Status & Risk Assistant',
       },
       body: JSON.stringify({
-        model: 'openrouter/auto',
-        max_tokens: 1000,
-        messages: [{ role: 'user', content: prompt }],
-        response_format: { type: 'json_object' },
-      }),
+      model: 'openrouter/free',
+      max_tokens: 1000,
+      messages: [{ role: 'user', content: prompt }],
+}),
     });
 
     if (!response.ok) {
