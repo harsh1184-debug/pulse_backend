@@ -35,14 +35,14 @@ if (envOk) {
     { auth: { persistSession: false } }
   );
 } else {
-  console.error('CRITICAL: Server cannot start — one or more required environment variables are missing.');
+  console.error('CRITICAL: Server starting with missing environment variables. Configure .env file.');
 }
 
 app.use(express.json());
 
-// ✅ FIX 1: CORS now reads from env var instead of hardcoded localhost
+// CORS Configuration
 const allowedOrigins = (
-  process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173'
+  process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000'
 )
   .split(',')
   .map((o) => o.trim());
@@ -50,7 +50,7 @@ const allowedOrigins = (
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
         callback(null, true);
       } else {
         callback(new Error(`CORS: origin "${origin}" not allowed`));
@@ -61,9 +61,10 @@ app.use(
   })
 );
 
+// Rate Limiting
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 10,
+  max: 20,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests. Please try again in a minute.' },
@@ -71,24 +72,41 @@ const apiLimiter = rateLimit({
 
 app.use('/api/', apiLimiter);
 
-app.post('/api/generate-update', async (req, res) => {
-  console.log('OPENROUTER_API_KEY exists:', !!process.env.OPENROUTER_API_KEY);
-  console.log('SUPABASE_URL exists:', !!process.env.SUPABASE_URL);
-  console.log('SUPABASE_SERVICE_ROLE_KEY exists:', !!process.env.SUPABASE_SERVICE_ROLE_KEY);
+// Health Check Endpoints
+app.get(['/', '/api/health'], (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'Pulse Backend API',
+    timestamp: new Date().toISOString(),
+    envOk,
+  });
+});
 
+// Fallback AI Models for OpenRouter to ensure high availability
+const FALLBACK_AI_MODELS = [
+  'nvidia/nemotron-3-super-120b-a12b:free',
+  'meta-llama/llama-3.3-70b-instruct:free',
+  'google/gemini-2.0-flash-lite-001',
+  'deepseek/deepseek-r1:free',
+  'openai/gpt-4o-mini',
+];
+
+app.post('/api/generate-update', async (req, res) => {
   if (!envOk || !supabaseAdmin) {
-    return res.status(500).json({ error: 'Backend configuration error.' });
+    return res.status(500).json({ error: 'Backend configuration error. Check server environment variables.' });
   }
 
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized. Missing or invalid token.' });
   }
+
   const token = authHeader.split(' ')[1];
   const {
     data: { user },
     error: authError,
   } = await supabaseAdmin.auth.getUser(token);
+
   if (authError || !user) {
     return res.status(401).json({ error: 'Unauthorized. Invalid or expired token.' });
   }
@@ -105,61 +123,74 @@ Today's date: ${today}
 Board:
 ${boardText}
 
-Reason about more than status labels and due dates alone — weigh whether blockers or notes make a task more urgent than its due date suggests, and whether dates have already passed. Not every Blocked task is necessarily "at risk" if it has a comfortable due date and no concerning note; not every overdue task is a crisis if it's nearly done. Use judgment, the way a sharp chief of staff would.
+Reason about status labels, due dates, blockers, and notes. Not every Blocked task is necessarily "at risk" if it has a comfortable due date; not every overdue task is a crisis if it's nearly done. Use sharp judgment.
 
 Respond with ONLY valid JSON and nothing else — no markdown, no code fences — matching exactly this shape:
 {"summary": "2-3 sentence stakeholder-ready narrative paragraph on overall project health", "shipped": ["short clause per completed task"], "inProgress": ["short clause per in-progress task noting where it stands"], "atRisk": [{"title": "task title", "reasoning": "one sentence on why this is genuinely at risk"}]}`;
 
-  try {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        'HTTP-Referer': allowedOrigins[0] || 'http://localhost:5173',
-        'X-Title': 'Pulse - AI Status & Risk Assistant',
-      },
-      body: JSON.stringify({
-      model: 'nvidia/nemotron-3-super-120b-a12b:free',
-      max_tokens: 1000,
-      messages: [{ role: 'user', content: prompt }],
-}),
-    });
+  let lastError = null;
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error('OpenRouter API error:', response.status, errText);
-      return res.status(500).json({ error: 'AI service temporarily unavailable.' });
+  for (const model of FALLBACK_AI_MODELS) {
+    try {
+      console.log(`[AI Request] Attempting status generation with model: ${model}`);
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          'HTTP-Referer': allowedOrigins[0] || 'http://localhost:5173',
+          'X-Title': 'Pulse - AI Status & Risk Assistant',
+        },
+        body: JSON.stringify({
+          model: model,
+          max_tokens: 1000,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        console.warn(`OpenRouter API error with model ${model}:`, response.status, errText);
+        lastError = `Model ${model} returned ${response.status}`;
+        continue; // Try next model
+      }
+
+      const data = await response.json();
+      if (data.error) {
+        console.warn(`OpenRouter response error with model ${model}:`, data.error);
+        lastError = data.error.message || `Model ${model} error`;
+        continue; // Try next model
+      }
+
+      const textBlocks = (data.choices || []).map((c) => c.message?.content || '').join('\n');
+      if (!textBlocks.trim()) {
+        lastError = `Model ${model} returned empty content`;
+        continue;
+      }
+
+      const startIdx = textBlocks.indexOf('{');
+      const endIdx = textBlocks.lastIndexOf('}');
+      if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) {
+        lastError = `Model ${model} returned invalid JSON`;
+        continue;
+      }
+
+      const parsed = JSON.parse(textBlocks.slice(startIdx, endIdx + 1).trim());
+      return res.json(parsed);
+    } catch (err) {
+      console.error(`Error trying model ${model}:`, err.message);
+      lastError = err.message;
     }
-
-    const data = await response.json();
-    if (data.error) {
-      console.error('OpenRouter error:', data.error);
-      return res.status(500).json({ error: 'AI service temporarily unavailable.' });
-    }
-
-    const textBlocks = (data.choices || []).map((c) => c.message?.content || '').join('\n');
-    if (!textBlocks.trim()) {
-      return res.status(500).json({ error: 'AI returned an empty response.' });
-    }
-
-    const startIdx = textBlocks.indexOf('{');
-    const endIdx = textBlocks.lastIndexOf('}');
-    if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) {
-      return res.status(500).json({ error: 'AI response was malformed.' });
-    }
-
-    const parsed = JSON.parse(textBlocks.slice(startIdx, endIdx + 1).trim());
-    res.json(parsed);
-  } catch (err) {
-    console.error('Server error:', err);
-    res.status(500).json({ error: 'Internal server error.' });
   }
+
+  return res.status(500).json({ error: `AI service temporarily unavailable. (${lastError})` });
 });
 
-// ✅ FIX 2: keep app.listen for local dev AND export for Vercel serverless
-app.listen(PORT, () => {
-  console.log(`Pulse backend running on http://localhost:${PORT}`);
-});
+// Start listener for standalone node process
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Pulse backend running on http://localhost:${PORT}`);
+  });
+}
 
 module.exports = app;
