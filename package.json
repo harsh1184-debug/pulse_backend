@@ -1,5 +1,8 @@
 {
   "name": "pulse-backend",
+  "engines": {
+    "node": "20.x"
+  },
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
