@@ -84,12 +84,14 @@ app.get(['/', '/api/health'], (req, res) => {
 
 // Fallback AI Models for OpenRouter to ensure high availability
 const FALLBACK_AI_MODELS = [
+  'openrouter/free',
   'nvidia/nemotron-3-super-120b-a12b:free',
   'meta-llama/llama-3.3-70b-instruct:free',
   'google/gemini-2.0-flash-lite-001',
   'deepseek/deepseek-r1:free',
   'openai/gpt-4o-mini',
 ];
+
 
 app.post('/api/generate-update', async (req, res) => {
   if (!envOk || !supabaseAdmin) {
