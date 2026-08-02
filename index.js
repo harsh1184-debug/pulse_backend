@@ -19,18 +19,36 @@ app.use((req, res, next) => {
   next();
 });
 
-const REQUIRED_ENV_VARS = [
-  ['SUPABASE_URL', process.env.SUPABASE_URL],
-  ['SUPABASE_SERVICE_ROLE_KEY', process.env.SUPABASE_SERVICE_ROLE_KEY],
-  ['OPENROUTER_API_KEY', process.env.OPENROUTER_API_KEY],
-];
+function configured(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
 
-let envOk = true;
-for (const [name, value] of REQUIRED_ENV_VARS) {
-  if (!value) {
-    console.error(`CRITICAL: Missing Server Env Variable — ${name} is not set.`);
-    envOk = false;
+// The service-role key is preferred, but an anon key is sufficient for the
+// only Supabase operation this API performs: validating a caller's JWT.
+// Supporting the alias makes the deployment less fragile without exposing a
+// privileged database key to a function that does not need one.
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+const configIssues = [];
+
+if (!configured(process.env.SUPABASE_URL)) {
+  configIssues.push('SUPABASE_URL');
+} else {
+  try {
+    new URL(process.env.SUPABASE_URL);
+  } catch {
+    configIssues.push('SUPABASE_URL (must be a valid URL)');
   }
+}
+if (!configured(supabaseKey)) {
+  configIssues.push('SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY');
+}
+if (!configured(process.env.OPENROUTER_API_KEY)) {
+  configIssues.push('OPENROUTER_API_KEY');
+}
+
+let envOk = configIssues.length === 0;
+for (const issue of configIssues) {
+  console.error(`CRITICAL: Invalid or missing server environment variable — ${issue}.`);
 }
 
 let supabaseAdmin;
@@ -38,7 +56,7 @@ if (envOk) {
   try {
     supabaseAdmin = createClient(
       process.env.SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY,
+      supabaseKey,
       { auth: { persistSession: false } }
     );
   } catch (err) {
@@ -46,17 +64,21 @@ if (envOk) {
     envOk = false;
   }
 } else {
-  console.error('CRITICAL: Server starting with missing environment variables. Configure .env file.');
+  console.error('CRITICAL: Server starting with invalid environment configuration. Configure the deployment environment variables.');
 }
 
 app.use(express.json());
 
 // CORS Configuration
-const allowedOrigins = (
-  process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000'
-)
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
-  .map((o) => o.trim());
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+const localhostOrigins = ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000'];
+if (process.env.NODE_ENV !== 'production' && allowedOrigins.length === 0) {
+  allowedOrigins.push(...localhostOrigins);
+}
 
 app.use(
   cors({
@@ -90,6 +112,7 @@ app.get(['/', '/api/health'], (req, res) => {
     service: 'Pulse Backend API',
     timestamp: new Date().toISOString(),
     envOk,
+    ...(envOk ? {} : { configurationIssues: configIssues }),
   });
 });
 
@@ -115,7 +138,10 @@ const FALLBACK_AI_MODELS = [
 
 app.post('/api/generate-update', async (req, res) => {
   if (!envOk || !supabaseAdmin) {
-    return res.status(500).json({ error: 'Backend configuration error. Check server environment variables.' });
+    return res.status(503).json({
+      error: 'Backend configuration error. Configure the server environment variables and redeploy.',
+      configurationIssues: configIssues,
+    });
   }
 
   const authHeader = req.headers.authorization;
@@ -215,4 +241,6 @@ if (require.main === module) {
   });
 }
 
+// Exposed for no-network unit tests only; no secret values are included.
+app.pulseConfig = { envOk, configurationIssues: [...configIssues] };
 module.exports = app;
