@@ -29,11 +29,16 @@ for (const [name, value] of REQUIRED_ENV_VARS) {
 
 let supabaseAdmin;
 if (envOk) {
-  supabaseAdmin = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY,
-    { auth: { persistSession: false } }
-  );
+  try {
+    supabaseAdmin = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY,
+      { auth: { persistSession: false } }
+    );
+  } catch (err) {
+    console.error('CRITICAL: Failed to create Supabase client:', err.message);
+    envOk = false;
+  }
 } else {
   console.error('CRITICAL: Server starting with missing environment variables. Configure .env file.');
 }
@@ -83,13 +88,22 @@ app.get(['/', '/api/health'], (req, res) => {
 });
 
 // Fallback AI Models for OpenRouter to ensure high availability
+// All models are free-tier on OpenRouter
 const FALLBACK_AI_MODELS = [
   'openrouter/free',
+  'google/gemma-4-31b-it:free',
+  'nvidia/nemotron-3-ultra-550b-a55b:free',
+  'openai/gpt-oss-20b:free',
+  'cohere/north-mini-code:free',
+  'google/gemma-4-26b-a4b-it:free',
+  'inclusionai/ling-3.0-flash:free',
+  'nvidia/nemotron-3-nano-30b-a3b:free',
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
   'nvidia/nemotron-3-super-120b-a12b:free',
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'google/gemini-2.0-flash-lite-001',
-  'deepseek/deepseek-r1:free',
-  'openai/gpt-4o-mini',
+  'nvidia/nemotron-nano-12b-v2-vl:free',
+  'nvidia/nemotron-nano-9b-v2:free',
+  'poolside/laguna-s-2.1:free',
+  'poolside/laguna-xs-2.1:free',
 ];
 
 
