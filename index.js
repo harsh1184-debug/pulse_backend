@@ -8,6 +8,12 @@ const { createClient } = require('@supabase/supabase-js');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Trust Vercel's proxy so express-rate-limit can read X-Forwarded-For
+app.set('trust proxy', 1);
+
+// Suppress favicon requests (returns 204 No Content)
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
 app.use((req, res, next) => {
   console.log(`[Incoming Request] ${req.method} ${req.url}`);
   next();
