@@ -11,8 +11,8 @@ const PORT = process.env.PORT || 3001;
 // Trust Vercel's proxy so express-rate-limit can read X-Forwarded-For
 app.set('trust proxy', 1);
 
-// Suppress favicon requests (returns 204 No Content)
-app.get('/favicon.ico', (req, res) => res.status(204).end());
+// Suppress browser favicon probes (returns 204 No Content).
+app.get(['/favicon.ico', '/favicon.png'], (req, res) => res.status(204).end());
 
 app.use((req, res, next) => {
   console.log(`[Incoming Request] ${req.method} ${req.url}`);
@@ -34,7 +34,10 @@ if (!configured(process.env.SUPABASE_URL)) {
   configIssues.push('SUPABASE_URL');
 } else {
   try {
-    new URL(process.env.SUPABASE_URL);
+    const supabaseUrl = new URL(process.env.SUPABASE_URL);
+    if (!['https:', 'http:'].includes(supabaseUrl.protocol)) {
+      configIssues.push('SUPABASE_URL (must start with https:// or http://)');
+    }
   } catch {
     configIssues.push('SUPABASE_URL (must be a valid URL)');
   }
@@ -61,6 +64,10 @@ if (envOk) {
     );
   } catch (err) {
     console.error('CRITICAL: Failed to create Supabase client:', err.message);
+    // `createClient` validates URL/key shape more strictly than the initial
+    // presence check. Include a safe, actionable diagnosis in health output;
+    // neither the URL nor any secret is ever returned.
+    configIssues.push('SUPABASE_URL or Supabase API key is invalid');
     envOk = false;
   }
 } else {
